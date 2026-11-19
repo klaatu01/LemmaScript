@@ -2,6 +2,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [[ ${1:-} == lean ]]; then
+  fixture_dir=$(mktemp -d)
+  trap 'rm -rf "$fixture_dir"' EXIT
+  cp -R examples/support "$fixture_dir/support"
+  sed 's/return a === a;/return a === drawCredit();/' examples/externDraw.ts > "$fixture_dir/externDraw.ts"
+  npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/externDraw.ts"
+  # Compile the generated declarations and the unchanged proof in one temporary module.
+  { echo 'import LemmaScript'; echo 'import LemmaScript.Extern'
+    sed '/^import /d' "$fixture_dir/externDraw.types.lean" "$fixture_dir/externDraw.def.lean" examples/externDraw.proof.lean
+  } > "$fixture_dir/Mutation.lean"
+  if lake env lean "$fixture_dir/Mutation.lean" > "$fixture_dir/result" 2>&1; then
+    echo 'Two independent draws unexpectedly proved equal'; exit 1
+  fi
+  cat "$fixture_dir/result"
+  grep -Eq 'case ensures|⊢ .* = .*' "$fixture_dir/result"
+  exit
+fi
+
 # Fixture runs use temp dirs outside any git repo, so the run log would land in
 # the current directory. Keep it off; the run-log section turns it on locally.
 export LSC_RUN_LOG=false
@@ -197,9 +215,8 @@ if ! grep -Fq '"proof-dir": "proofs"' <<<"$defaults_report" || grep -Fq '"artifa
   exit 1
 fi
 
-expect_failure \
-  "Lean accepted an extern made impure by project config" \
-  npx tsx tools/src/lsc.ts gen --backend=lean "$configured"
+npx tsx tools/src/lsc.ts gen --backend=lean "$configured"
+grep -q 'in DemonicT Option' "$config_fixture/src/configured.types.lean"
 expect_failure \
   "an extern was accepted with both //@ pure and //@ impure" \
   npx tsx tools/src/lsc.ts gen --backend=dafny "$config_fixture/src/conflicting-extern.ts"

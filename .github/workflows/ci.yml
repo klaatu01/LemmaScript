@@ -76,6 +76,13 @@ jobs:
       - name: Build
         run: lake build
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm ci
+      - name: Reject a false Lean extern contract
+        run: ./tools/test-fixtures.sh lean
+
   # Dafny verification of the examples, sharded across runners. The `tools` job
   # enforces drift + additions-only (regen --no-verify); this job runs the actual
   # `dafny verify` in parallel. Files are split by index (i % N == shard), so no
