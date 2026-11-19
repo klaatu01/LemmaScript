@@ -33,6 +33,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `safe-slice` | Top of file | Legacy alias for `option safe-slice true` (see §2.7) |
 | `verify` | Before first statement of function/method body | Mark function for verification (see §2.5) |
 | `requires` | Before first statement of function body | Precondition |
+| `throws E when P` | Function-level | Reject with built-in error `E` exactly when entry predicate `P` holds (Dafny, §2.14). |
 | `ensures` | Before first statement of function body | Postcondition (`\result` refers to return value) |
 | `contract` | Before first statement of function body | Natural-language description of intent — prover-ignored; surfaced by `lsc extract` for vetting against the formal `requires`/`ensures` (see §2.13) |
 | `invariant` | Before first statement of loop body | Loop invariant |
@@ -424,6 +425,16 @@ export function clamp(x: number, lo: number, hi: number): number { ... }
 The text is natural language, not a spec expression: the provers ignore it entirely (it never reaches the generated Dafny or Lean). `lsc extract` surfaces it per function in the Raw IR (`RawFunction.contract`); multiple `//@ contract` lines are collected in order, like `//@ requires`. Its purpose is to catch the gap between *intent* and *proof* — a spec can be verified yet guarantee less, or other, than the prose claims. The external [`lemmascript-claimcheck`](https://github.com/midspiral/lemmascript-claimcheck) tool checks `//@ contract` against the formal `//@ ensures` by an LLM round-trip.
 
 ---
+
+### 2.14 Exceptional postconditions
+
+A standalone Dafny-targeted function can declare one exceptional outcome with
+`//@ throws RangeError when amount > captured - refunded`. The entry condition holds
+exactly on rejection. Ordinary `ensures` describe the normal result. A call to
+such a function propagates the same declared error or must prove that it succeeds.
+The generated result uses `None` for rejection and `Some(value)` for success.
+Use a built-in error constructor with zero arguments or a literal message.
+See [refund.ts](examples/refund.ts).
 
 ## 3. Spec Expression Translation
 
@@ -1153,14 +1164,6 @@ When a variable has a user-defined type, string literal comparisons map to const
 | `"connecting"` (as value) | `.connecting` | `State.connecting` |
 
 The same coercion applies wherever a string literal appears in a user-type context: ternary branches, record fields, return values, and variable assignments.
-
-A standalone Dafny-targeted function can declare one exceptional outcome with
-`//@ throws RangeError when amount > captured - refunded`. The entry condition holds
-exactly on rejection. Ordinary `ensures` describe the normal result. A call to
-such a function propagates the same declared error or must prove that it succeeds.
-The generated result uses `None` for rejection and `Some(value)` for success.
-Use a built-in error constructor with zero arguments or a literal message.
-See [refund.ts](examples/refund.ts).
 
 ### 6.3 Discriminated Unions
 

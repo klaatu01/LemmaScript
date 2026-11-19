@@ -32,3 +32,20 @@ method refundRemainder(captured: int, refunded: int) returns (res: int)
   }
   return i_outcome1.value;
 }
+
+method maybeRefund(enabled: bool, amount: int, captured: int, refunded: int) returns (res: Option<int>)
+  ensures (res.None? == (enabled && (amount > (captured - refunded))))
+  ensures ((!res.None?) ==> (!(enabled) ==> (res.value == refunded)))
+{
+  var i_branch0: int := *;
+  if enabled {
+    var i_outcome2 := refund(amount, captured, refunded);
+    if i_outcome2.None? {
+      return Option.None;
+    }
+    i_branch0 := i_outcome2.value;
+  } else {
+    i_branch0 := refunded;
+  }
+  return Option.Some(i_branch0);
+}

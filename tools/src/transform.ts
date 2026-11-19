@@ -456,6 +456,7 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
 // For one declared error, Option<T> represents the two possible outcomes.
 let exceptionalCallees = new Map<string, string>();
 let activeError: string | undefined;
+let exceptionalVoid = false;
 const rejected: Expr = { kind: "constructor", type: "Option", name: "None", args: [] };
 
 function checkLazyOutcome(expr: TExpr): void {
@@ -1837,7 +1838,8 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "return": {
       const { binds, expr } = liftMethodCalls(s.value);
-      return [...binds, { kind: "return", value: activeError ? { kind: "constructor", type: "Option", name: "Some", args: [expr] } : expr }];
+      return [...binds, { kind: "return", value: activeError ? { kind: "constructor", type: "Option", name: "Some",
+        args: [exceptionalVoid ? { kind: "tupleLiteral", elems: [] } : expr] } : expr }];
     }
     case "break": return [{ kind: "break" }];
     case "continue": return [{ kind: "continue" }];
@@ -2636,6 +2638,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
     }
 
     activeError = fn.exceptional?.error;
+    exceptionalVoid = !!activeError && fn.returnTy.kind === "void";
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `Pure.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
@@ -2665,6 +2668,8 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       body = [...shadows, ...body];
     }
 
+    if (exceptionalVoid) body.push({ kind: "return", value: { kind: "constructor", type: "Option", name: "Some",
+      args: [{ kind: "tupleLiteral", elems: [] }] } });
     activeError = undefined;
     return {
       kind: "method" as const,
