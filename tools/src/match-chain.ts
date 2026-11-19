@@ -1,5 +1,6 @@
 import { Node, SyntaxKind, type Expression, type Type } from "ts-morph";
 import type { RawExpr, RawStmt } from "./rawir.js";
+import { findDiscriminant } from "./discriminant.js";
 import { freshName } from "./names.js";
 
 interface Arm { pattern: Node; handler: Node }
@@ -56,9 +57,22 @@ function patternTest(pattern: Node, value: RawExpr, type: Type, extract: (expr: 
       const key = prop.getNameNode();
       if (!Node.isIdentifier(key) && !Node.isStringLiteral(key)) patternError(key, "computed keys are unsupported");
       const field = Node.isIdentifier(key) ? key.getText() : key.getLiteralValue();
+      if (field === "__proto__") patternError(key, "prototype-setting object patterns are unsupported");
       const decl = members.map(m => m.getProperty(field)).find(p => !!p);
       if (!decl) patternError(prop, `unknown pattern field ${field}`);
-      if (!members.every(m => m.getProperty(field))) tests.push({ kind: "binop", op: "in", left: {kind: "str", value: field}, right: value });
+      const owners = members.filter(m => m.getProperty(field));
+      if (owners.length < members.length) {
+        const tag = findDiscriminant(members);
+        if (!tag) patternError(prop, "variant-only fields require a tagged union");
+        const cases = owners.map((m): RawExpr => {
+          const literal = m.getPropertyOrThrow(tag).getTypeAtLocation(prop);
+          const right: RawExpr = literal.isStringLiteral()
+            ? { kind: "str", value: String(literal.getLiteralValue()) }
+            : { kind: "bool", value: literal.getText() === "true" };
+          return { kind: "binop", op: "===", left: { kind: "field", obj: value, field: tag }, right };
+        });
+        tests.push(cases.reduce((left, right) => ({ kind: "binop", op: "||", left, right })));
+      }
       const fieldType = (concrete.getProperty(field) ?? decl).getTypeAtLocation(prop);
       tests.push(patternTest(prop.getInitializerOrThrow(), { kind: "field", obj: value, field }, fieldType, extract));
     }
@@ -78,7 +92,7 @@ function patternTest(pattern: Node, value: RawExpr, type: Type, extract: (expr: 
 }
 
 export function lowerMatch(chain: NonNullable<ReturnType<typeof matchChain>>, id: number,
-    extract: (expr: Expression) => RawExpr, input?: RawExpr): RawStmt[] {
+    extract: (expr: Expression) => RawExpr, tsType: string | null, input?: RawExpr): RawStmt[] {
   const name = freshName("_match" + id);
   const value = variable(name);
   const line = chain.input.getStartLineNumber();
@@ -97,5 +111,5 @@ export function lowerMatch(chain: NonNullable<ReturnType<typeof matchChain>>, id
     next = [{ kind: "if", cond: patternTest(pattern, value, chain.input.getType(), extract),
       then: handler(arm, 2), else: next, line }];
   }
-  return [{kind: "let", name, mutable: false, tsType: null, init: input ?? extract(chain.input), line}, ...next];
+  return [{kind: "let", name, mutable: false, tsType, init: input ?? extract(chain.input), line}, ...next];
 }

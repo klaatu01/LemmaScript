@@ -5,6 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
+import { findDiscriminant } from "./discriminant.js";
 import { matchChain, lowerMatch } from "./match-chain.js";
 import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
@@ -359,11 +360,28 @@ function _eraseGenerics(tsType: string): string {
 // A match embedded in another expression gets a local verification helper.
 // Explicit value parameters retain the evaluation point (including inside a
 // short-circuit branch) and give captured locals their lexical bindings.
+function matchInputType(node: Expression, id: number): string | null {
+  const type = node.getType();
+  if (!["__object", "__type"].includes(typeToString(type))) return null;
+  const name = freshName("MatchInput" + id);
+  const extra: TypeDeclInfo[] = [];
+  const record = extractRecord(name, type, node, undefined, extra, true);
+  if (!record) throw new Error(`Unsupported anonymous match input at line ${node.getStartLineNumber()}`);
+  _synthArrayUnions?.push(...extra, record);
+  return name;
+}
+
+function extractReturnedMatch(chain: NonNullable<ReturnType<typeof matchChain>>): RawStmt[] {
+  const id = matchCounter++;
+  return lowerMatch(chain, id, extractExpr, matchInputType(chain.input, id));
+}
+
 function extractMatchExpression(node: Expression, chain: NonNullable<ReturnType<typeof matchChain>>): RawExpr {
   const id = matchCounter++;
   const name = freshName("_matchExpr" + id);
   const input = freshName("_input" + id);
-  const params = [{name: input, tsType: typeToString(chain.input.getType())}];
+  const inputType = matchInputType(chain.input, id);
+  const params = [{name: input, tsType: inputType ?? typeToString(chain.input.getType())}];
   const args: RawExpr[] = [extractExpr(chain.input)];
   const captures = new Set<string>();
   const handlers = [...chain.arms.map(a => a.handler), ...(chain.fallback ? [chain.fallback] : [])];
@@ -389,7 +407,7 @@ function extractMatchExpression(node: Expression, chain: NonNullable<ReturnType<
         || (Node.isPropertyAccessExpression(n) && ["push","pop","set","add","delete","sort","unshift"].includes(n.getName()))))
       throw new Error("Mutation in an embedded match handler requires returning the match directly");
   }
-  const body = lowerMatch(chain, id, extractExpr, { kind: "var", name: input });
+  const body = lowerMatch(chain, id, extractExpr, inputType, { kind: "var", name: input });
   matchHelpers.push({ name, params, body, returnType: typeToString(node.getType()), line: node.getStartLineNumber(),
     tsParams: params.map(p => ({kind: "simple", binds: [p.name]})), typeParams: [], exported: false,
     requires: [], ensures: [], contract: [], decreases: null, pure: false, autohavoc: false, typeAnnotations: [] });
@@ -1194,7 +1212,7 @@ function extractInterface(decl: InterfaceDeclaration, extraDecls?: TypeDeclInfo[
   return extractRecord(decl.getName(), decl.getType(), decl, overrides, extraDecls);
 }
 
-function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
+function extractRecord(name: string, type: Type, locationNode: Node, overrides?: Map<string, string>, extraDecls?: TypeDeclInfo[], objectLiterals = false): TypeDeclInfo | null {
   const props = type.getProperties();
   if (props.length === 0) return null;
   const fields: FieldInfo[] = [];
@@ -1219,7 +1237,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
 
     // Inline anonymous object types: ts-morph names them __type.
     // Generate a synthetic named record and reference it by name instead.
-    if (extraDecls && tsType.includes("__type")) {
+    if (extraDecls && (tsType.includes("__type") || (objectLiterals && tsType.includes("__object")))) {
       let innerType = propType;
       let isOptional = false;
       if (propType.isUnion()) {
@@ -1233,7 +1251,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
       if (innerType.isObject() && !innerType.isArray()) {
         const fName = prop.getName();
         const synName = name + fName.charAt(0).toUpperCase() + fName.slice(1);
-        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
+        const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls, objectLiterals);
         if (extracted) {
           extraDecls.push(extracted);
           tsType = isOptional ? `${synName} | undefined` : synName;
@@ -1244,22 +1262,6 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
     fields.push({ name: prop.getName(), tsType, ...optionalKey });
   }
   return { name, kind: "record", fields };
-}
-
-function findDiscriminant(members: Type[]): string | null {
-  if (members.length === 0) return null;
-  const firstProps = members[0].getProperties();
-  for (const prop of firstProps) {
-    const name = prop.getName();
-    const allHave = members.every(m => {
-      const p = m.getProperty(name);
-      if (!p) return false;
-      const t = p.getDeclarations()[0] ? p.getTypeAtLocation(p.getDeclarations()[0]) : null;
-      return (t?.isStringLiteral() || t?.isBooleanLiteral()) ?? false;
-    });
-    if (allHave) return name;
-  }
-  return null;
 }
 
 /** Recover a field's *declared* type text when the semantic printer degraded
@@ -2080,7 +2082,7 @@ function extractStmts(stmts: Node[]): RawStmt[] {
       const expr = s.getExpression();
       const chain = expr && matchChain(expr);
       if (chain) {
-        result.push(...lowerMatch(chain, matchCounter++, extractExpr));
+        result.push(...extractReturnedMatch(chain));
         continue;
       }
       // Bare `return;` in a `T | undefined` function → emit `return None;`
@@ -2207,7 +2209,7 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   let annots: Annotation[];
   if (body && !Node.isBlock(body)) {
     const chain = matchChain(body as Expression);
-    extractedBody = chain ? lowerMatch(chain, matchCounter++, extractExpr)
+    extractedBody = chain ? extractReturnedMatch(chain)
       : [{ kind: "return", value: extractExpr(body as Expression), line: body.getStartLineNumber() }];
     annots = parentAnnotations ?? collectFunctionAnnotations(fn);
   } else if (body && Node.isBlock(body)) {

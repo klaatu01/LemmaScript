@@ -10,6 +10,12 @@ datatype Entry = Entry(kind: string, amount: int, change: Change)
 
 datatype Signal = on(n: int) | off(n: int)
 
+datatype Notice = entry(change: Change) | idle(reason: string)
+
+datatype MatchInput2Entry = MatchInput2Entry(amount: int)
+
+datatype MatchInput2 = MatchInput2(entry: MatchInput2Entry)
+
 function i_matchExpr1(i_input1: Signal, base: int): int
 {
   var i_match1 := i_input1;
@@ -84,13 +90,43 @@ lemma addSignal_ensures(signal: Signal, base: int)
 {
 }
 
+function markZero(amount: int): int
+{
+  var i_match2 := MatchInput2(MatchInput2Entry(amount));
+  if (i_match2.entry.amount == 0) then
+    var x := i_match2;
+    (x.entry.amount + 1)
+  else
+    var x := i_match2;
+    x.entry.amount
+}
+
+lemma markZero_ensures(amount: int)
+  ensures ((amount == 0) ==> (markZero(amount) == 1))
+{
+}
+
+function originMarker(event: Notice): int
+{
+  var i_match3 := event;
+  if (i_match3.entry? && (i_match3.change.origin.site == 0)) then
+    1
+  else
+    0
+}
+
+lemma originMarker_ensures(event: Notice)
+  ensures (event.idle? ==> (originMarker(event) == 0))
+{
+}
+
 function bit(signal: Signal): int
 {
-  var i_match2 := signal;
-  match i_match2 {
-    case on(i__match2_n) =>
+  var i_match4 := signal;
+  match i_match4 {
+    case on(i__match4_n) =>
       1
-    case off(i__match2_n) =>
+    case off(i__match4_n) =>
       0
   }
 }

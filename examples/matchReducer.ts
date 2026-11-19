@@ -38,3 +38,16 @@ export function addSignal(signal: Signal, base: number): number {
   //@ ensures signal.tag === "on" ==> \result === base + 2
   return 1 + match(signal).with({tag: "on"}, () => base + 1).otherwise(() => base);
 }
+
+export function markZero(amount: number): number {
+  //@ ensures amount === 0 ==> \result === 1
+  return match({entry: {amount}})
+    .with({entry: {amount: 0}}, x => x.entry.amount + 1)
+    .otherwise(x => x.entry.amount);
+}
+
+type Notice = {tag: "entry"; change: Change} | {tag: "idle"; reason: string};
+export function originMarker(event: Notice): number {
+  //@ ensures event.tag === "idle" ==> \result === 0
+  return match(event).with({change: {origin: {site: 0}}}, () => 1).otherwise(() => 0);
+}
