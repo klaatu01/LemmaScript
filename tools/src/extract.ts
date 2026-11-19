@@ -172,8 +172,9 @@ function detectCrossFileExtern(
   const annots = collectFunctionAnnotations(externalDecl);
   const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
   const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
-  const impure = externIsImpure(externalDecl, qualified);
-  return { qualified, flat, typeParams, params, returnType, requires, ensures, impure };
+  const exceptional = throwsClause(annots);
+  const impure = externIsImpure(externalDecl, qualified) || !!exceptional;
+  return { qualified, flat, typeParams, params, returnType, requires, ensures, impure, exceptional };
 }
 
 /** Build a concat-tree from a mixed list of literal and SpreadElement nodes.
@@ -785,7 +786,7 @@ function extractExpr(node: Expression): RawExpr {
 // ── Annotation parsing ───────────────────────────────────────
 
 const PREFIX = "//@ ";
-const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
+const KEYWORDS = ["throws", "requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
 /** The other directives (SPEC §2.1) besides options, read by keyword elsewhere.
  *  `guarded` is consumed by lemmascript-guard's manifest sweep. */
 const DIRECTIVES = ["verify", "pure", "impure", "skip", "extern", "havoc", "autohavoc", "assert", "assume",
@@ -793,6 +794,17 @@ const DIRECTIVES = ["verify", "pure", "impure", "skip", "extern", "havoc", "auto
 export type AnnotKind = (typeof KEYWORDS)[number];
 /** `line` is set only for annotations in the file being extracted. */
 interface Annotation { kind: AnnotKind; expr: string; line?: number }
+
+const builtinErrors = new Set(["Error", "RangeError", "TypeError", "ReferenceError", "SyntaxError", "EvalError", "URIError"]);
+
+function throwsClause(annots: Annotation[]): RawFunction["exceptional"] {
+  const clauses = annotExprs(annots, "throws");
+  if (!clauses.length) return undefined;
+  const parts = /^(\w+)\s+when\s+(.+)$/.exec(clauses[0]);
+  if (clauses.length !== 1 || !parts || !builtinErrors.has(parts[1]))
+    throw new Error("Expected one //@ throws <built-in error> when <entry condition>");
+  return { error: parts[1], when: parts[2] };
+}
 
 function parseAnnotation(text: string): Annotation | null {
   if (!text.startsWith(PREFIX)) return null;
@@ -2077,7 +2089,13 @@ function extractStmts(stmts: Node[]): RawStmt[] {
     }
 
     if (Node.isThrowStatement(s)) {
-      result.push({ kind: "throw", line });
+      const value = s.getExpression();
+      const ctor = Node.isNewExpression(value) ? value.getExpression() : undefined;
+      const error = ctor && Node.isIdentifier(ctor) && builtinErrors.has(ctor.getText())
+        && ctor.getSymbol()?.getDeclarations().every(d => d.getSourceFile().compilerNode.hasNoDefaultLib)
+        && Node.isNewExpression(value) && value.getArguments().every(Node.isStringLiteral)
+        ? ctor.getText() : undefined;
+      result.push({ kind: "throw", error, line });
       continue;
     }
 
@@ -2266,6 +2284,7 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
       if (inferred.isAny()) return "unknown";
       return _eraseGenerics(typeToString(inferred));
     })(),
+    exceptional: throwsClause(annots),
     requires: annotExprs(annots, "requires"),
     ensures: annotExprs(annots, "ensures"),
     contract: annotExprs(annots, "contract"),
@@ -2570,9 +2589,10 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     const annots = collectFunctionAnnotations(f.node);
     const requires = annots.filter(a => a.kind === "requires").map(a => a.expr);
     const ensures = annots.filter(a => a.kind === "ensures").map(a => a.expr);
+    const exceptional = throwsClause(annots);
     _externs.set(qualified, {
       qualified, flat, typeParams, params, returnType, requires, ensures,
-      impure: externIsImpure(f.node, qualified, f.parentStmt),
+      exceptional, impure: externIsImpure(f.node, qualified, f.parentStmt) || !!exceptional,
     });
   }
 

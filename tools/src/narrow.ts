@@ -719,6 +719,7 @@ function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
   const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
   return {
     ...fn,
+    exceptional: fn.exceptional && { ...fn.exceptional, when: walkExpr(fn.exceptional.when, specCtx) },
     requires: fn.requires.map(e => walkExpr(e, specCtx)),
     ensures: fn.ensures.map(e => walkExpr(e, specCtx)),
     decreases: fn.decreases ? walkExpr(fn.decreases, specCtx) : null,

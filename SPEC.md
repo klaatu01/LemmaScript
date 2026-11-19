@@ -1154,6 +1154,14 @@ When a variable has a user-defined type, string literal comparisons map to const
 
 The same coercion applies wherever a string literal appears in a user-type context: ternary branches, record fields, return values, and variable assignments.
 
+A standalone Dafny-targeted function can declare one exceptional outcome with
+`//@ throws RangeError when amount > captured - refunded`. The entry condition holds
+exactly on rejection. Ordinary `ensures` describe the normal result. A call to
+such a function propagates the same declared error or must prove that it succeeds.
+The generated result uses `None` for rejection and `Some(value)` for success.
+Use a built-in error constructor with zero arguments or a literal message.
+See [refund.ts](examples/refund.ts).
+
 ### 6.3 Discriminated Unions
 
 Discriminated unions with data fields map to:

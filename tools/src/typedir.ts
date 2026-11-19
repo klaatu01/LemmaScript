@@ -138,7 +138,7 @@ export type TStmt =
       defaultBody: TStmt[] }
   | { kind: "forof"; names: string[]; nameTypes: Ty[]; iterable: TExpr;
       invariants: TExpr[]; doneWith: TExpr | null; body: TStmt[] }
-  | { kind: "throw" }
+  | { kind: "throw"; error?: string }
   | { kind: "ghostLet"; name: string; ty: Ty; init: TExpr }
   | { kind: "ghostAssign"; target: string; value: TExpr }
   | { kind: "assert"; expr: TExpr; assumed?: boolean }
@@ -163,6 +163,7 @@ export interface TParam {
 }
 
 export interface TFunction {
+  exceptional?: { error: string; when: TExpr };
   name: string;
   typeParams: string[];
   params: TParam[];
@@ -190,6 +191,7 @@ export interface TConst {
 
 /** Resolved counterpart of RawExtern. */
 export interface TExtern {
+  exceptional?: { error: string; when: TExpr };
   qualified: string;
   flat: string;
   typeParams: string[];

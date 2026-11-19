@@ -1742,7 +1742,7 @@ function resolveStmt(s: RawStmt, ctx: Ctx): [TStmt, Env | null] {
     }
 
     case "throw":
-      return [{ kind: "throw" }, ctx.env];
+      return [{ kind: "throw", error: s.error }, ctx.env];
 
     case "switch":
       return [{
@@ -1908,7 +1908,7 @@ function computePureFns(functions: RawFunction[], externDecls: import("./rawir.j
   // Seed: syntactically non-pure functions (skip //@ pure)
   const nonPure = new Set(
     functions.filter(fn => !forcePure.has(fn.name) &&
-      (!isSyntacticallyPure(fn.body) || containsImpureExternCall(fn.body, impureExternNames)))
+      (fn.exceptional || !isSyntacticallyPure(fn.body) || containsImpureExternCall(fn.body, impureExternNames)))
       .map(fn => fn.name)
   );
 
@@ -1944,6 +1944,7 @@ function resolveFunction(
   opts?: { thisBinding?: { name: string; ty: Ty }; forcePure?: boolean }
 ): TFunction {
 
+  if (fn.exceptional && (fn.pure || opts?.thisBinding)) throw new Error("//@ throws requires a standalone method");
   const overrides = new Map(fn.typeAnnotations.map(a => [a.name, a.type]));
   const params: TParam[] = fn.params.map(p => ({ name: p.name, ty: expandAlias(resolveTsType(p.tsType, overrides, p.name), typeDecls) }));
   const returnTy = expandAlias(resolveTsType(fn.returnType, overrides, "\\result"), typeDecls);
@@ -1976,6 +1977,7 @@ function resolveFunction(
 
   return {
     name: fn.name, typeParams, params, returnTy,
+    exceptional: fn.exceptional && { error: fn.exceptional.error, when: resolveSpec(fn.exceptional.when, requiresCtx) },
     requires: resolvedRequires,
     ensures: resolveSpecs(fn.ensures, ensuresCtxNarrowed),
     decreases: fn.decreases ? resolveSpec(fn.decreases, requiresCtx) : null,
@@ -2075,6 +2077,7 @@ export function resolveModule(raw: RawModule): TModule {
       typeParams: ext.typeParams,
       params: ext.params.map((p, i) => ({ name: p.name, ty: sig.params[i] })),
       returnTy: sig.returnTy,
+      exceptional: ext.exceptional && { error: ext.exceptional.error, when: resolveSpec(ext.exceptional.when, baseCtx) },
       requires: resolveClauses("requires", baseCtx),
       ensures: resolveClauses("ensures", ensuresCtx),
       impure: ext.impure,

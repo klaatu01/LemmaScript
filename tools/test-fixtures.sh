@@ -272,6 +272,12 @@ expect_failure "UTF-16 accepted an explicit stdlib choice" \
 expect_absent "$fixture_dir/incompatible-strings/source.dfy.gen"
 expect_absent "$fixture_dir/incompatible-strings/source.dfy"
 
+# A well-typed mutation must reach the verifier and fail its contract.
+sed 's@amount > captured - refunded) throw@amount >= captured - refunded) throw@' examples/refund.ts > "$fixture_dir/refund.ts"
+expect_failure "incorrect refund verified" \
+  npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/refund.ts" > "$fixture_dir/refund.log" 2>&1
+grep -q "postcondition could not be proved" "$fixture_dir/refund.log"
+
 # Prove the same collection contracts with default stdlib, scalar/local, and
 # UTF-16/local. All generated artifacts stay in the temporary fixture directory.
 cp -R tools/fixtures/collection-library-project "$fixture_dir/local-collections"

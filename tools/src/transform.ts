@@ -453,7 +453,45 @@ function buildNestedFieldUpdate(recv: TExpr, newVal: Expr): { root: string; valu
   return null;
 }
 
+// For one declared error, Option<T> represents the two possible outcomes.
+let exceptionalCallees = new Map<string, string>();
+let activeError: string | undefined;
+const rejected: Expr = { kind: "constructor", type: "Option", name: "None", args: [] };
+
+function checkLazyOutcome(expr: TExpr): void {
+  if (!exceptionalCallees.size) return;
+  mapTExpr(expr, node => {
+    if (node.kind === "call" && node.fn.kind === "var" && exceptionalCallees.has(node.fn.name))
+      throw new Error("Use an if statement for an exceptional call in a narrowed or value-returning short-circuit branch");
+    return null;
+  });
+}
+
+function outcomeContract(returnType: Ty, ensures: Expr[], when?: TExpr): { returnType: Ty; ensures: Expr[] } {
+  if (!when) return { returnType, ensures };
+  const result: Expr = { kind: "var", name: "\\result" };
+  const success: Expr = { kind: "binop", op: "!=", left: result, right: rejected };
+  const payload: Expr = { kind: "field", obj: result, field: "value" };
+  return { returnType: { kind: "optional", inner: returnType }, ensures: [
+    { kind: "binop", op: "==", left: { kind: "binop", op: "==", left: result, right: rejected }, right: transformExpr(when) },
+    ...ensures.map((e): Expr => ({ kind: "implies", premises: [success], conclusion: replaceVar(e, "\\result", payload) })),
+  ] };
+}
+
 function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
+  if (e.kind === "call" && e.fn.kind === "var") {
+    const error = exceptionalCallees.get(e.fn.name);
+    if (error) {
+      if (!binds || e.callKind !== "method") throw new Error('Exceptional call requires a method statement context: ' + e.fn.name);
+      const name = freshName('_outcome' + _liftCounter++);
+      const value: Expr = { kind: "var", name };
+      const args = e.args.map(arg => lowerExpr(arg, binds));
+      binds.push({ kind: "let-bind", name, value: { kind: "app", fn: e.fn.name, args } });
+      binds.push({ kind: "if", cond: { kind: "binop", op: "==", left: value, right: rejected },
+        then: [error === activeError ? { kind: "return", value: rejected } : { kind: "assert", expr: { kind: "bool", value: false } }], else: [] });
+      return { kind: "field", obj: value, field: "value" };
+    }
+  }
   // Monadic lifting: extract embedded method calls to let-binds.
   // `callKind: "method"` means a global var-fn call (classifyCall returns
   // "method" only for `fn.kind === "var"`). Receiver method calls have
@@ -539,6 +577,7 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
         }
         return { kind: "binop", op: OP_MAP[e.op], left, right };
       }
+      if (e.op === "&&" || e.op === "||") checkLazyOutcome(e.right);
       // Discriminant check: x.discriminant === "foo" → x = .foo (before generic string literal comparison)
       if ((e.op === "===" || e.op === "!==") && e.left.kind === "field" && e.left.isDiscriminant && e.right.kind === "str") {
         const objTy = e.left.obj.ty.kind === "user" ? e.left.obj.ty.name : undefined;
@@ -1075,13 +1114,16 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "arrayLiteral", elems: e.elems.map(el => lowerExpr(el, binds)) };
 
     case "lambda": {
+      const enclosingError = activeError;
       if (e.params.some(p => p.rest || p.defaultValue)) {
         throw new Error("lambda rest/default bindings require a known callback argument list");
       }
       // Pass the module typeDecls (not []), so type lookups inside the lambda
       // body — e.g. a `switch`'s variant fields — resolve. A bare `[]` left a
       // discriminated-union switch in a lambda with binderless patterns.
-      const body = transformStmts(e.body, _typeDecls);
+      activeError = undefined;
+      let body: Stmt[];
+      try { body = transformStmts(e.body, _typeDecls); } finally { activeError = enclosingError; }
       // Flatten an if/let/return-shaped multi-statement body into a single
       // `return <expr>` so both backends' single-return-lambda fast path emits
       // it (Dafny lambdas are expression-only; Lean prefers the expression form
@@ -1146,6 +1188,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "havoc", type: e.ty };
 
     case "someMatch": {
+      checkLazyOutcome(e.someBody);
+      checkLazyOutcome(e.noneBody);
       let someBody: Expr;
       let scrutinee: Expr | string;
       const path = asTAccessPath(e.scrutinee);
@@ -1180,6 +1224,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
     }
 
     case "tagMatch": {
+      for (const arm of e.cases) checkLazyOutcome(arm.body);
+      if (e.fallthrough) checkLazyOutcome(e.fallthrough);
       // Expression-form tagMatch — emitted by `ruleImplArrayIsArray` for spec
       // implications like `Array.isArray(x) ==> B` and by
       // `ruleConditionalArrayIsArray` for ternary narrowing. Substitutes
@@ -1783,7 +1829,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
         ];
       }
       // Top-level method call → direct monadic bind, no lifting needed
-      if (s.value.kind === "call" && s.value.callKind === "method")
+      if (s.value.kind === "call" && s.value.callKind === "method" && !(s.value.fn.kind === "var" && exceptionalCallees.has(s.value.fn.name)))
         return [{ kind: "bind", target: s.target, value: transformExpr(s.value) }];
       const { binds, expr } = liftMethodCalls(s.value);
       return [...binds, { kind: "assign", target: s.target, value: expr }];
@@ -1791,7 +1837,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
 
     case "return": {
       const { binds, expr } = liftMethodCalls(s.value);
-      return [...binds, { kind: "return", value: expr }];
+      return [...binds, { kind: "return", value: activeError ? { kind: "constructor", type: "Option", name: "Some", args: [expr] } : expr }];
     }
     case "break": return [{ kind: "break" }];
     case "continue": return [{ kind: "continue" }];
@@ -1858,6 +1904,7 @@ function transformStmt(s: TStmt, typeDecls: TypeDeclInfo[]): Stmt[] {
       }];
 
     case "throw":
+      if (activeError && s.error === activeError) return [{ kind: "return", value: rejected }];
       return [{ kind: "assert", expr: { kind: "bool", value: false } }];
 
     case "forof":
@@ -2490,6 +2537,11 @@ export function transformModuleDafny(mod: TModule): { typesFile: Module | null; 
 }
 
 export function transformModule(mod: TModule, specImport?: string, moduleBaseOverride?: string): { typesFile: Module | null; defFile: Module } {
+  activeError = undefined;
+  exceptionalCallees = new Map();
+  for (const fn of mod.functions) if (fn.exceptional) exceptionalCallees.set(fn.name, fn.exceptional.error);
+  for (const ext of mod.externs) if (ext.exceptional) exceptionalCallees.set(ext.flat, ext.exceptional.error);
+  if (exceptionalCallees.size && _opts.backend !== "dafny") throw new Error("//@ throws requires the Dafny backend");
   _forofCounters.clear();
   _liftCounter = 0;
   _callbackCounter = 0;
@@ -2562,11 +2614,10 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       name: ext.flat,
       typeParams: ext.typeParams,
       params: ext.params.map(p => ({ name: p.name, type: p.ty })),
-      returnType: ext.returnTy,
       requires: ext.requires.map(transformExpr),
-      ensures: ext.ensures.map(e => ext.impure
+      ...outcomeContract(ext.returnTy, ext.ensures.map(e => ext.impure
         ? transformExpr(e)
-        : replaceVar(transformExpr(e), "\\result", fnCall)),
+        : replaceVar(transformExpr(e), "\\result", fnCall)), ext.exceptional?.when),
       impure: ext.impure,
     };
   });
@@ -2584,6 +2635,7 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       else ensures.push(transformExpr(e));
     }
 
+    activeError = fn.exceptional?.error;
     _forofCounters.clear();
     let body = pureDefNames.has(fn.name)
       ? [{ kind: "return" as const, value: { kind: "app" as const, fn: _opts.backend === "lean" ? `Pure.${fn.name}` : fn.name, args: fn.params.map(p => ({ kind: "var" as const, name: p.name })) } }]
@@ -2613,14 +2665,14 @@ export function transformModule(mod: TModule, specImport?: string, moduleBaseOve
       body = [...shadows, ...body];
     }
 
+    activeError = undefined;
     return {
       kind: "method" as const,
       name: fn.name,
       typeParams: fn.typeParams,
       params: fn.params.map(p => ({ name: p.name, type: p.ty })),
-      returnType: fn.returnTy,
+      ...outcomeContract(fn.returnTy, ensures, fn.exceptional?.when),
       requires: fn.requires.map(transformExpr),
-      ensures,
       decreases: fn.decreases ? transformExpr(fn.decreases) : null,
       body,
     };

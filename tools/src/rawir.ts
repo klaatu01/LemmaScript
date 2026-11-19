@@ -153,6 +153,7 @@ export interface RawForOf {
 }
 
 export interface RawThrow {
+  error?: string;
   kind: "throw";
   line: number;
 }
@@ -197,6 +198,7 @@ export interface RawTsParam {
 }
 
 export interface RawFunction {
+  exceptional?: { error: string; when: string };
   name: string;
   exported: boolean;      // part of the module's export surface (inline `export`, `export { }`, or re-export)
   typeParams: string[];   // unbounded generic type parameters (e.g. ["T"])
@@ -236,6 +238,7 @@ export interface RawConst {
  *  Spec strings here are unresolved — resolve.ts parses them in the extern's
  *  own param scope. */
 export interface RawExtern {
+  exceptional?: { error: string; when: string };
   qualified: string;       // dotted source name, e.g. "Wildcard.match"
   flat: string;            // emission name, e.g. "Wildcard_match"
   typeParams: string[];    // generic type parameters, e.g. ["S", "A"] (referenced by params/returnType)

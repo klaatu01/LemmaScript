@@ -28,7 +28,7 @@ import { readRecords, resolveLogDir, type VerifyRecord } from "./run-log.js";
  * here until it is classified. Other `//@` lines (`assert`, `havoc`, …) count as proof.
  */
 const ANNOTATION_ROLES: Record<AnnotKind, "spec" | "proof"> = {
-  requires: "spec",
+  throws: "spec", requires: "spec",
   ensures: "spec",
   contract: "spec",
   invariant: "proof",
