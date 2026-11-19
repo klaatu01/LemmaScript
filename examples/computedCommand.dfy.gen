@@ -6,6 +6,16 @@ datatype Command = capture(amount: int) | refund(amount: int)
 
 datatype Ledger = Ledger(captured: int, refunded: int)
 
+datatype ChangesReceive = ChangesReceive(settled: int)
+
+datatype ChangesCancel = ChangesCancel(reversed: int)
+
+datatype Changes = Changes(receive: ChangesReceive, cancel: ChangesCancel)
+
+datatype ChangeEvent = receive(value_receive: ChangesReceive) | cancel(value_cancel: ChangesCancel)
+
+type Pair = (int, string)
+
 function delta(c: Command): int
 {
   match c {
@@ -49,5 +59,31 @@ function captureOf(ledger: Ledger): int
 
 lemma captureOf_ensures(ledger: Ledger)
   ensures (captureOf(ledger) == ledger.captured)
+{
+}
+
+function net(e: ChangeEvent): int
+{
+  match e {
+    case receive(i_e_value) =>
+      i_e_value.settled
+    case cancel(i_e_value) =>
+      (-(i_e_value.reversed))
+  }
+}
+
+lemma net_ensures(e: ChangeEvent)
+  ensures (e.receive? ==> (net(e) == e.value_receive.settled))
+  ensures (e.cancel? ==> (net(e) == (-(e.value_cancel.reversed))))
+{
+}
+
+function select(p: (int, string)): int
+{
+  p.0
+}
+
+lemma select_ensures(p: (int, string))
+  ensures (select(p) == p.0)
 {
 }

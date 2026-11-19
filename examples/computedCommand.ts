@@ -26,3 +26,20 @@ export function captureOf(ledger: Ledger): number {
   //@ ensures \result === ledger.captured
   return readBalance(ledger);
 }
+
+type Changes = { receive: { settled: number }; cancel: { reversed: number } };
+type ChangeEvent = { [K in keyof Changes]: { tag: K; value: Changes[K] } }[keyof Changes];
+export function net(e: ChangeEvent): number {
+  //@ ensures e.tag === "receive" ==> \result === e.value.settled
+  //@ ensures e.tag === "cancel" ==> \result === -e.value.reversed
+  switch (e.tag) {
+    case "receive": return e.value.settled;
+    case "cancel": return -e.value.reversed;
+  }
+}
+
+type Pair = Infer<{output: [number, string]}>;
+export function select(p: Pair): number {
+  //@ ensures \result === p[0]
+  return p[0];
+}

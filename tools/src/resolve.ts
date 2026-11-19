@@ -370,7 +370,7 @@ function findDecl(ctx: Ctx, name: string): TypeDeclInfo | undefined {
 }
 
 /** Expand alias-kind typeDecls when the alias target is structural (array,
- *  map, set, optional, or another user type). Primitive-typed aliases like
+ *  tuple, map, set, optional, or another user type). Primitive-typed aliases like
  *  `type TaskId = number` stay as `user("TaskId")` so the generated Dafny
  *  preserves the alias name. Recursive through compound types; cycle-safe. */
 function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new Set()): Ty {
@@ -384,7 +384,7 @@ function expandAlias(ty: Ty, typeDecls: TypeDeclInfo[], seen: Set<string> = new 
       // Numeric enums must behave as numbers (not truthy user objects).
       if (decl.constEnumMembers) return { kind: "int" };
       const target = decl.aliasOfTy;
-      if (target.kind === "array" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
+      if (target.kind === "array" || target.kind === "tuple" || target.kind === "map" || target.kind === "set" || target.kind === "optional" || target.kind === "user") {
         return expandAlias(target, typeDecls, new Set([...seen, ty.name]));
       }
     }
