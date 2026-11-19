@@ -1053,8 +1053,34 @@ function isComputedNode(rhs: TypeNode | undefined): boolean {
     || (Node.isIndexedAccessTypeNode(rhs) && !!rhs.getFirstDescendantByKind(SyntaxKind.MappedType)));
 }
 
+/** Render a closed member through the checker. The declaration's source may
+ * still spell the generic template, for example Payloads[K] in a variant. */
+function computedMemberText(type: Type, location: Node, extra: TypeDeclInfo[]): string {
+  const existing = computedInstances.get(type) ?? nestedRecordNames.get(type);
+  if (existing) return existing;
+  if (type.isTuple()) return "[" + type.getTupleElements().map(t => computedMemberText(t, location, extra)).join(", ") + "]";
+  if (type.isArray()) return computedMemberText(type.getArrayElementTypeOrThrow(), location, extra) + "[]";
+  if (type.isUnion() && type.isNullable()) {
+    const present = type.getNonNullableType();
+    if (!present.isNever()) return computedMemberText(present, location, extra) + " | undefined";
+  }
+  const spelling = typeToString(type);
+  const alias = type.getAliasSymbol()?.getDeclarations().find(Node.isTypeAliasDeclaration);
+  const anonymousUnion = !alias && type.isUnion() && type.getUnionTypes().every(t => t.isObject());
+  if (!anonymousUnion && spelling !== "__type" && spelling !== "__object" && !(alias && isComputedTemplate(alias))) return spelling;
+  const name = freshName("ComputedShape" + computedInstances.size);
+  computedInstances.set(type, name);
+  const info = extractResolvedDecl(name, type, location, undefined, extra);
+  if (!info) throw new Error(`Unsupported computed field at line ${location.getStartLineNumber()}`);
+  extra.push(info);
+  return name;
+}
+
 function extractResolvedDecl(name: string, type: Type, decl: Node, tpField?: string[],
     extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
+  const resolved = computedInstances.get(type) === name;
+  const memberText = (t: Type) => resolved && extraDecls ? computedMemberText(t, decl, extraDecls) : typeToString(t);
+  if (resolved && type.isTuple()) return { name, kind: "alias", aliasOf: "[" + type.getTupleElements().map(memberText).join(", ") + "]" };
   const enumInfo = constEnumInfo(type);
   if (enumInfo) {
     // A type alias preserves numeric behavior but creates no value binding.
@@ -1081,9 +1107,9 @@ function extractResolvedDecl(name: string, type: Type, decl: Node, tpField?: str
           const fields: { name: string; tsType: string }[] = [];
           for (const prop of m.getProperties()) {
             if (prop.getName() === discriminant) continue;
-            let tsType = typeToString(prop.getTypeAtLocation(decl));
+            let tsType = memberText(prop.getTypeAtLocation(decl));
             const propDecl = prop.getDeclarations()[0];
-            tsType = declaredTypeTextIfBetter(propDecl, tsType);
+            if (!resolved) tsType = declaredTypeTextIfBetter(propDecl, tsType);
             if (propDecl && (propDecl as any).hasQuestionToken?.()) {
               // Normalize checker output that puts `undefined` first, then
               // ensure exactly one trailing `| undefined`.
@@ -1144,7 +1170,7 @@ function extractResolvedDecl(name: string, type: Type, decl: Node, tpField?: str
   // alias's own name (via getAliasSymbol), yielding a self-referential alias.
   if (type.isArray()) {
     const elem = type.getArrayElementTypeOrThrow();
-    return { name, typeParams: tpField, kind: "alias", aliasOf: `${typeToString(elem)}[]` };
+    return { name, typeParams: tpField, kind: "alias", aliasOf: `${memberText(elem)}[]` };
   }
   if (type.isObject() || type.isIntersection()) return extractRecord(name, type, decl, undefined, extraDecls);
   // Primitive type alias: type TaskId = number → alias
@@ -1189,7 +1215,8 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
     const fieldNode = propDecl && Node.isPropertySignature(propDecl) ? propDecl.getTypeNode() : undefined;
     let tsType = (fieldNode && (computedReference(fieldNode) || isComputedNode(fieldNode))
       ? annotationTypeText(fieldNode, propType) : undefined) ?? typeToString(propType);
-    tsType = declaredTypeTextIfBetter(propDecl, tsType);
+    if (computedInstances.get(type) === name && extraDecls) tsType = computedMemberText(propType, locationNode, extraDecls);
+    else tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
     // resolves to `Optional<T>`.
@@ -1219,6 +1246,7 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
         const extracted = extractRecord(synName, innerType, locationNode, undefined, extraDecls);
         if (extracted) {
           extraDecls.push(extracted);
+          nestedRecordNames.set(innerType, synName);
           tsType = isOptional ? `${synName} | undefined` : synName;
         }
       }
@@ -1260,11 +1288,9 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
   return text;
 }
 
-/** The type an annotation names, as text for `parseTsType`. That parser has
- *  no checker, so an indexed access type (`T["k"]`, `T["k"][number]`) would
- *  survive as an opaque name spelled with brackets. When the annotation uses
- *  one, render the checker's resolved type instead. */
+// Reuse checker identities so named and inline occurrences share their backend type.
 const computedInstances = new Map<Type, string>();
+const nestedRecordNames = new Map<Type, string>();
 
 function computedReference(tn: TypeNode): TypeAliasDeclaration | undefined {
   const ref = Node.isTypeReference(tn) ? tn.getTypeName().getSymbol() : undefined;
@@ -1280,6 +1306,7 @@ function assertClosedType(tn: TypeNode, type: Type): void {
     throw new Error(`Unresolved computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
 }
 
+/** Supply structural type text before parseTsType loses access to the checker. */
 function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
   const alias = computedReference(tn);
   if (alias || isComputedNode(tn)) {
@@ -2386,6 +2413,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // Set before declare-type parsing so declare-type field types can also synth.
   _synthArrayUnions = typeDecls;
   computedInstances.clear();
+  nestedRecordNames.clear();
 
   // `//@ declare-type Name { f1: T1, ... }` — record form.
   // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
