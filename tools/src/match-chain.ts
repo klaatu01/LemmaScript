@@ -51,7 +51,6 @@ function patternTest(pattern: Node, value: RawExpr, type: Type, extract: (expr: 
     const members = concrete.isUnion() ? concrete.getUnionTypes() : [concrete];
     if (!members.every(m => m.isObject() || m.isIntersection())) patternError(pattern, "object pattern requires a record or tagged union");
     const tests: RawExpr[] = [];
-    if (type.isNullable()) tests.push({ kind: "binop", op: "!==", left: value, right: variable("undefined") });
     for (const prop of pattern.getProperties()) {
       if (!Node.isPropertyAssignment(prop)) patternError(prop, "expected literal property: pattern");
       const key = prop.getNameNode();
@@ -76,7 +75,10 @@ function patternTest(pattern: Node, value: RawExpr, type: Type, extract: (expr: 
       const fieldType = (concrete.getProperty(field) ?? decl).getTypeAtLocation(prop);
       tests.push(patternTest(prop.getInitializerOrThrow(), { kind: "field", obj: value, field }, fieldType, extract));
     }
-    return tests.length ? tests.reduce(and) : {kind: "bool", value: true};
+    const fields: RawExpr = tests.length ? tests.reduce(and) : { kind: "bool", value: true };
+    return type.isNullable() ? { kind: "conditional",
+      cond: { kind: "binop", op: "!==", left: value, right: variable("undefined") },
+      then: fields, else: { kind: "bool", value: false } } : fields;
   }
   if (pattern.getKind() === SyntaxKind.NullKeyword) {
     if (type.isUnion() && type.getUnionTypes().some(m => m.isUndefined()))

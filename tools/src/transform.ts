@@ -481,6 +481,8 @@ function lowerExpr(e: TExpr, binds: Stmt[] | null): Expr {
       return { kind: "str", value: e.value };
 
     case "unop":
+      if (e.op === "matchPayload")
+        return { kind: "field", obj: lowerExpr(e.expr, binds), field: _opts.backend === "lean" ? "get!" : "value" };
       // Only `num` folds. A `bigint` payload is a string, so negating it here
       // would coerce through `Number` and round: `-9007199254740993n` stays a
       // structural `unop("-", bigint(...))` and is negated by the emitter.

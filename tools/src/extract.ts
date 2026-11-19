@@ -66,6 +66,7 @@ let _validateDependency: (source: SourceFile) => void = () => {};
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
 let matchCounter = 0;
+let inMatchHandler = false;
 const matchHelpers: RawFunction[] = [];
 
 /** Register the call's callee as a cross-file extern if applicable, then
@@ -371,9 +372,22 @@ function matchInputType(node: Expression, id: number): string | null {
   return name;
 }
 
+function extractMatchNode(node: Expression): RawExpr {
+  if (!Node.isArrowFunction(node)) return extractExpr(node);
+  const previous = inMatchHandler;
+  inMatchHandler = true;
+  try { return extractExpr(node); } finally { inMatchHandler = previous; }
+}
+
+function handlerPresence(node: Expression): { presentInHandler?: true } {
+  if (!inMatchHandler) return {};
+  const type = node.getType();
+  return type.isAny() || type.isUnknown() || type.isNullable() ? {} : { presentInHandler: true };
+}
+
 function extractReturnedMatch(chain: NonNullable<ReturnType<typeof matchChain>>): RawStmt[] {
   const id = matchCounter++;
-  return lowerMatch(chain, id, extractExpr, matchInputType(chain.input, id));
+  return lowerMatch(chain, id, extractMatchNode, matchInputType(chain.input, id));
 }
 
 function extractMatchExpression(node: Expression, chain: NonNullable<ReturnType<typeof matchChain>>): RawExpr {
@@ -407,7 +421,7 @@ function extractMatchExpression(node: Expression, chain: NonNullable<ReturnType<
         || (Node.isPropertyAccessExpression(n) && ["push","pop","set","add","delete","sort","unshift"].includes(n.getName()))))
       throw new Error("Mutation in an embedded match handler requires returning the match directly");
   }
-  const body = lowerMatch(chain, id, extractExpr, inputType, { kind: "var", name: input });
+  const body = lowerMatch(chain, id, extractMatchNode, inputType, { kind: "var", name: input });
   matchHelpers.push({ name, params, body, returnType: typeToString(node.getType()), line: node.getStartLineNumber(),
     tsParams: params.map(p => ({kind: "simple", binds: [p.name]})), typeParams: [], exported: false,
     requires: [], ensures: [], contract: [], decreases: null, pure: false, autohavoc: false, typeAnnotations: [] });
@@ -474,7 +488,7 @@ function extractExpr(node: Expression): RawExpr {
 
   // Identifier
   if (Node.isIdentifier(node)) {
-    return { kind: "var", name: node.getText() };
+    return { kind: "var", name: node.getText(), ...handlerPresence(node) };
   }
 
   // this
@@ -509,7 +523,7 @@ function extractExpr(node: Expression): RawExpr {
     if (obj.kind === "optChain") {
       return { ...obj, chain: [...obj.chain, { kind: "field", name: field }] };
     }
-    return { kind: "field", obj, field };
+    return { kind: "field", obj, field, ...handlerPresence(node) };
   }
 
   // Element access: arr[i] or arr?.[i]

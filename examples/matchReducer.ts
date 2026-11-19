@@ -51,3 +51,9 @@ export function originMarker(event: Notice): number {
   //@ ensures event.tag === "idle" ==> \result === 0
   return match(event).with({change: {origin: {site: 0}}}, () => 1).otherwise(() => 0);
 }
+
+type Audit = { origin: Origin | null };
+export function auditMarker(event: Audit): number {
+  //@ ensures event.origin === null ==> \result === 0
+  return match(event).with({origin: {site: 0}}, e => e.origin.site + 1).otherwise(() => 0);
+}
