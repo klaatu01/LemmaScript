@@ -43,3 +43,14 @@ export function select(p: Pair): number {
   //@ ensures \result === p[0]
   return p[0];
 }
+
+type Credit = Infer<{output: Changes["receive"]}>;
+export function settled(entry: Credit): number {
+  //@ ensures \result === entry.settled
+  return entry.settled;
+}
+
+export function credited(changes: Changes): number {
+  //@ ensures \result === changes.receive.settled
+  return settled(changes.receive);
+}

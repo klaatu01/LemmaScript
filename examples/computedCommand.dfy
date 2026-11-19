@@ -16,6 +16,8 @@ datatype ChangeEvent = receive(value_receive: ChangesReceive) | cancel(value_can
 
 type Pair = (int, string)
 
+type Credit = ChangesReceive
+
 function delta(c: Command): int
 {
   match c {
@@ -85,5 +87,25 @@ function select(p: (int, string)): int
 
 lemma select_ensures(p: (int, string))
   ensures (select(p) == p.0)
+{
+}
+
+function settled(entry: ChangesReceive): int
+{
+  entry.settled
+}
+
+lemma settled_ensures(entry: ChangesReceive)
+  ensures (settled(entry) == entry.settled)
+{
+}
+
+function credited(changes: Changes): int
+{
+  settled(changes.receive)
+}
+
+lemma credited_ensures(changes: Changes)
+  ensures (credited(changes) == changes.receive.settled)
 {
 }
