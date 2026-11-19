@@ -1092,7 +1092,8 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // instantiations, rather than the template itself, have runtime shapes.
   if (tpField && isComputedTemplate(decl)) return null;
   const rhs = decl.getTypeNode();
-  if (!tpField && rhs && computedReference(rhs)) {
+  if (!tpField && rhs && (computedReference(rhs) || isComputedNode(rhs))) {
+    assertClosedType(rhs, type);
     const existing = computedInstances.get(type);
     if (existing) return { name, kind: "alias", aliasOf: existing };
     computedInstances.set(type, name);
@@ -1101,7 +1102,10 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
 }
 
 function isComputedTemplate(decl: TypeAliasDeclaration): boolean {
-  const rhs = decl.getTypeNode();
+  return isComputedNode(decl.getTypeNode());
+}
+
+function isComputedNode(rhs: TypeNode | undefined): boolean {
   return !!rhs && (Node.isConditionalTypeNode(rhs) || Node.isMappedTypeNode(rhs)
     || (Node.isIndexedAccessTypeNode(rhs) && !!rhs.getFirstDescendantByKind(SyntaxKind.MappedType)));
 }
@@ -1232,12 +1236,16 @@ function extractRecord(name: string, type: Type, locationNode: Node, overrides?:
   const fields: FieldInfo[] = [];
   for (const prop of props) {
     const propDecl = prop.getDeclarations()[0];
-    const optionalKey = propDecl && (propDecl as any).hasQuestionToken?.() ? { optionalKey: true } : {};
+    const mapped = (type.getObjectFlags() & ts.ObjectFlags.Mapped) !== 0;
+    const optional = mapped ? prop.isOptional() : propDecl && (propDecl as any).hasQuestionToken?.();
+    const optionalKey = optional ? { optionalKey: true } : {};
     const override = overrides?.get(prop.getName());
     if (override) { fields.push({ name: prop.getName(), tsType: override, ...optionalKey }); continue; }
 
     const propType = prop.getTypeAtLocation(locationNode);
-    let tsType = typeToString(propType);
+    const fieldNode = propDecl && Node.isPropertySignature(propDecl) ? propDecl.getTypeNode() : undefined;
+    let tsType = (fieldNode && (computedReference(fieldNode) || isComputedNode(fieldNode))
+      ? annotationTypeText(fieldNode, propType) : undefined) ?? typeToString(propType);
     tsType = declaredTypeTextIfBetter(propDecl, tsType);
     // Optional property: `foo?: T` reports as `T` (ts-morph strips the
     // `| undefined` from a question-token type). Add it back so the field
@@ -1318,22 +1326,28 @@ const computedInstances = new Map<Type, string>();
 function computedReference(tn: TypeNode): TypeAliasDeclaration | undefined {
   const ref = Node.isTypeReference(tn) ? tn.getTypeName().getSymbol() : undefined;
   const alias = (ref?.getAliasedSymbol() ?? ref)?.getDeclarations().find(Node.isTypeAliasDeclaration);
+  // Record already has a collection representation, including string index signatures.
+  if (alias?.getName() === "Record" && alias.getSourceFile().compilerNode.hasNoDefaultLib) return undefined;
   return alias && alias.getTypeParameters().length && isComputedTemplate(alias) ? alias : undefined;
+}
+
+function assertClosedType(tn: TypeNode, type: Type): void {
+  if ((type.getFlags() & (ts.TypeFlags.Conditional | ts.TypeFlags.TypeParameter | ts.TypeFlags.IndexedAccess))
+      || type.isAny() || type.isUnknown() || type.isNever())
+    throw new Error(`Unresolved computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
 }
 
 function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
   const alias = computedReference(tn);
-  if (alias) {
-    if (type.getFlags() & (ts.TypeFlags.Conditional | ts.TypeFlags.TypeParameter | ts.TypeFlags.IndexedAccess)
-        || type.isAny() || type.isUnknown())
-      throw new Error(`Unresolved computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
+  if (alias || isComputedNode(tn)) {
+    assertClosedType(tn, type);
     const existing = computedInstances.get(type);
     if (existing) return existing;
-    const name = freshName(alias.getName() + "Instance" + computedInstances.size);
+    const name = freshName((alias?.getName() ?? "Computed") + "Instance" + computedInstances.size);
     computedInstances.set(type, name);
     const extra: TypeDeclInfo[] = [];
     const info = extractResolvedDecl(name, type, tn, undefined, extra);
-    if (!info || (info.kind === "alias" && info.aliasOf?.startsWith(alias.getName() + "<")))
+    if (!info || (info.kind === "alias" && alias && info.aliasOf?.startsWith(alias.getName() + "<")))
       throw new Error(`Unsupported computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
     _synthArrayUnions?.push(...extra, info);
     return name;
