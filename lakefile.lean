@@ -14,6 +14,7 @@ lean_lib LemmaScript
 lean_lib Examples where
   srcDir := "examples"
   roots := #[
+    `«externDraw.types», `«externDraw.def», `«externDraw.proof»,
     `«binarySearch.types», `«binarySearch.spec», `«binarySearch.def», `«binarySearch.proof»,
     `«arraySum.spec», `«arraySum.def», `«arraySum.proof»,
     `«linearSearch.def», `«linearSearch.proof»,

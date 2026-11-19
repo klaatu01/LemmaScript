@@ -48,7 +48,7 @@ Annotations are TypeScript comments of the form `//@ <keyword> <expression>`.
 | `havoc <key>` | Before a variable declaration | Nondeterministic subexpression — replace calls matching `<key>` (see §2.10). |
 | `declare-type N { f: T, ... }` | Before any statement | Declare a record type for cross-file types (see §2.5). |
 | `extern` | Before function declaration | Treat function as a body-less axiom — extract signature only, skip body (see §2.11). `//@ extern NS.method` registers it under a dotted name. |
-| `impure` | Alongside `extern`, or on a cross-file source declaration | Model each call with an independent arbitrary result instead of a deterministic function (see §2.9–2.11). Dafny only. |
+| `impure` | Alongside `extern`, or on a cross-file source declaration | Model each call with an independent arbitrary result instead of a deterministic function (see §2.9–2.11). |
 | `autohavoc` | File-level, or before a `//@ verify` function | Abstract every unmodellable expression to a nondeterministic value, so verification rests only on declared contracts (see §2.12). Dafny only. |
 | `skip` | Before a statement or top-level value declaration | Omit it from the verification model (for side-effect-only code or an intentionally unsupported declaration). |
 
@@ -272,7 +272,7 @@ Selected methods participate in type and constant dependency discovery, includin
 
 A call to a symbol declared in another `.ts` file (resolved via ts-morph) is emitted by default as `function {:axiom} <flat>(...): T` — opaque, uninterpreted, deterministic, and extensional. Any `//@ requires` / `//@ ensures` on the source declaration are lifted onto the axiom so callers reason against the same contract the source verified; the lift is transitive through nested cross-file references. Only symbols *actually called* are externed; `.d.ts` declarations are skipped (covered by built-in dispatch, §3.8). No annotation is required. A project's `extern-default: impure` changes unmarked externs to the method model described next; `//@ pure` on the source declaration restores deterministic behavior for one extern.
 
-Mark an effectful or nondeterministic source declaration `//@ impure` to emit its auto-extern as a body-less Dafny `method {:axiom}` instead. Every invocation then receives an independent arbitrary result satisfying that invocation's lifted contract, so two calls with equal arguments are not assumed equal. An impure call makes its caller a method and cannot appear in a specification or lambda. This models call-varying results, not shared heap effects; it is Dafny-only.
+Mark an effectful or nondeterministic source declaration `//@ impure` to emit its auto-extern as a body-less Dafny `method {:axiom}` instead. Every invocation then receives an independent arbitrary result satisfying that invocation's lifted contract, so two calls with equal arguments are not assumed equal. An impure call makes its caller a method and cannot appear in a specification or lambda. This models call-varying results. Lean uses Velvet demonic choice and requires a witness that the extern’s postconditions are satisfiable (SPEC_LEAN.md §3.1).
 
 ### 2.10 Havoc: `//@ havoc`
 

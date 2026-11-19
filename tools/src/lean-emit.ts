@@ -745,6 +745,31 @@ function orderDeclsByDeps(decls: Decl[]): Decl[] {
   return sorted;
 }
 
+const nondeterministicMethods = new Set<string>();
+
+function emitImpureExtern(d: Extract<Decl, {kind: "extern"}>): string {
+  const params = d.params.map(p => `(${escapeName(p.name)} : ${tyToLean(p.type)})`);
+  const binders = [...d.typeParams.map(t => `{${t} : Type}`), ...params].join(" ");
+  const name = escapeName(d.name);
+  _resultName = freshNameWhere("res", n => d.params.some(p => escapeName(p.name) === n) || usesNameInDecl(d.requires, d.ensures, [], n));
+  const ty = tyToLean(d.returnType);
+  const predicate = d.ensures.map(e => `(${emitExpr(e)})`).join(" ∧ ") || "True";
+  return [
+    `method ${name} ${binders} returns (${_resultName} : ${ty}) in DemonicT Option`,
+    ...d.requires.map(e => `  requires (${emitExpr(e)} : Prop)`),
+    `  requires (∃ ${_resultName} : ${ty}, ${predicate})`,
+    "  signals False",
+    `  ensures ${predicate}`,
+    "do",
+    `  let (${_resultName} : ${ty}) :| ${predicate} using (LemmaScript.externFinder _)`,
+    `  return ${_resultName}`,
+    "",
+    `prove_correct ${name} by`,
+    `  velvet_vcgen [${name}] with (expose_names; try finish)`,
+    "  all_goals first | contradiction | grind",
+  ].join("\n");
+}
+
 function emitDecl(d: Decl): string {
   switch (d.kind) {
     case "inductive": {
@@ -817,7 +842,9 @@ function emitDecl(d: Decl): string {
       _invariantIndex = 0;
       _rangeIndex = 0;
       const lines = [`method ${d.name} ${params} returns (${_resultName} : ${tyToLean(d.returnType)})`];
+      if (nondeterministicMethods.has(d.name)) lines[0] += " in DemonicT Option";
       d.requires.forEach((r, i) => lines.push(`  requires require_${i + 1}: (${emitExpr(r)} : Prop)`));
+      if (nondeterministicMethods.has(d.name)) lines.push("  signals False");
       d.ensures.forEach((e, i) => lines.push(`  ensures ensures_${i + 1}: (${emitExpr(e)} : Prop)`));
       lines.push("  do");
       _boolCtx = true;
@@ -841,9 +868,7 @@ function emitDecl(d: Decl): string {
 
     case "extern": {
       if (d.impure) {
-        throw new Error(
-          "impure extern is not supported in the Lean backend; add //@ pure to this extern or use extern-default: pure",
-        );
+        return emitImpureExtern(d);
       }
       // Mirror Dafny's `function {:axiom}`: an uninterpreted total function.
       // In Lean that is an `opaque` declaration (sound — it commits to no body,
@@ -894,6 +919,7 @@ function emitPureExpr(e: Expr, indent: number): string {
  *  (not between types and def — the def file reads the types file's registries). */
 export function resetLeanModule(): void {
   _resultName = "res";
+  nondeterministicMethods.clear();
   _unionCtors.clear();
   _opaqueNames.clear();
   _opaqueNames.add("Unknown");
@@ -909,6 +935,21 @@ export function emitLeanFile(file: Module): string {
   _needsJSString = false;
   _needsUnknown = false;
   registerInductives(file.decls);
+  // A transitive caller must sequence the same nondeterministic computation.
+  for (const d of file.decls) if (d.kind === "extern" && d.impure) nondeterministicMethods.add(d.name);
+  let added: boolean;
+  do {
+    added = false;
+    for (const d of file.decls) {
+      if (d.kind !== "method" || nondeterministicMethods.has(d.name)) continue;
+      const refs = new Set<string>();
+      collectRefNames(d.body, refs);
+      if ([...refs].some(name => nondeterministicMethods.has(name))) {
+        nondeterministicMethods.add(d.name);
+        added = true;
+      }
+    }
+  } while (added);
   // Emit declarations first so _needsJSString / _needsUnknown are set
   const declLines: string[] = [];
   for (const decl of file.decls) {
@@ -927,10 +968,12 @@ export function emitLeanFile(file: Module): string {
     lines.push("-/");
   }
   for (const imp of file.imports) lines.push(`import ${imp}`);
+  if (nondeterministicMethods.size) lines.push("import LemmaScript.Extern");
   if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
     lines.push("import LemmaScript.JSString");
   if (file.options.length > 0) lines.push("");
   for (const opt of file.options) lines.push(`set_option ${opt.key} ${opt.value}`);
+  if (nondeterministicMethods.size) lines.push("", "noncomputable section");
   lines.push(...declLines);
   return lines.join("\n") + "\n";
 }

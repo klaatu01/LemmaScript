@@ -136,7 +136,7 @@ This enables proofs by standard Lean induction over sequences of calls. The Velv
 
 **Spec references:** In `//@ ensures`, `//@ requires`, and `//@ invariant` annotations, calls to pure functions are resolved as `Pure.fnName`. The resolve phase classifies these as `spec-pure` call kind, and the transform emits the qualified name. Calls to external Lean-defined spec helpers (e.g., `sumTo` in a hand-written `.spec.lean`) pass through unqualified.
 
-Deterministic extern declarations become opaque Lean functions. Impure externs are Dafny-only and are rejected by the Lean backend, whether selected explicitly with `//@ impure` or inherited from `extern-default: impure`; add `//@ pure` to an individual extern used by a Lean file.
+Deterministic extern declarations become opaque Lean functions. Impure externs and their callers use Velvet’s `DemonicT Option`. Each call chooses a fresh result satisfying the lifted contract. Total correctness requires the caller to establish that such a result exists. Both `//@ impure` and the project’s `extern-default` participate in this selection.
 
 **Proof note:** Since the method body is `return Pure.foo ...`, supply its pure mirror to the discharger: `velvet_vcgen [foo] with finish [Pure.foo]`.
 
