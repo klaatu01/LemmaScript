@@ -73,7 +73,7 @@ Adding an independent option is: one registry entry, then `options["<key>"]` in 
 
 | Key | Values | Default | Consumed by | Backend |
 |---|---|---|---|---|
-| `extern-default` | `pure` \| `impure` | `pure` | extract (`externIsImpure`) | both (Lean rejects impure) |
+| `extern-default` | `pure` \| `impure` | `pure` | extract (`externIsImpure`) | both |
 | `safe-slice` | boolean | `false` | dafny-emit | Dafny |
 | `proof-dir` | relative path | unset (source directory) | `lsc.ts` artifact paths | Dafny |
 
@@ -81,7 +81,7 @@ Defaults are today's behavior in every row (requirement 3). The two model option
 
 ### 3.1 `extern-default`
 
-The existing explicit-impurity check becomes `externIsImpure`, with this precedence: `//@ impure` → impure; `//@ pure` → pure; both → error; neither → `options["extern-default"] === "impure"`. It applies uniformly to in-file `//@ extern` declarations and to cross-file auto-externs (read from the *source* declaration, including a `//@ pure` on a `const` arrow's variable statement). `extractModule(sourceFile, options)` carries the option in; `RawExtern.impure` stays a resolved boolean, so `lsc extract` output reflects the project's choice and resolve/transform/emit need no change beyond comments and the Lean error text ("add `//@ pure` for a deterministic extern"). This is an opt-in extension of today's behavior, not a global default flip, and does not depend on a separate extern-default PR.
+The existing explicit-impurity check becomes `externIsImpure`, with this precedence: `//@ impure` → impure; `//@ pure` → pure; both → error; neither → `options["extern-default"] === "impure"`. It applies uniformly to in-file `//@ extern` declarations and to cross-file auto-externs (read from the *source* declaration, including a `//@ pure` on a `const` arrow's variable statement). `extractModule(sourceFile, options)` carries the option in; `RawExtern.impure` stays a resolved boolean, so `lsc extract` output reflects the project's choice and the Lean backend uses Velvet’s nondeterministic choice for each impure invocation. This is an opt-in extension of today's behavior, not a global default flip, and does not depend on a separate extern-default PR.
 
 ### 3.2 `safe-slice`
 
