@@ -830,7 +830,7 @@ When the bound variable IS used after the match, the `let` is preserved and the 
 | `while (c) { ... }` | `while c' invariant ... do ...` | `while c' invariant ... { ... }` |
 | `x = f(a, b)` (method call) | `x ← f a b` | `x := f(a, b);` |
 | `break` | `break` | `break;` |
-| `throw new Error(...)` | — | `assert false;` |
+| `throw new Error(...)` | — | `return Option.None;` for the declared error under §2.14, otherwise `assert false;` |
 | `switch` / discriminant if-chain | `match` | `match` |
 
 All expressions `e` above are translated using the spec expression rules (§3).
