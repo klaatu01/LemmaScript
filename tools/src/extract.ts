@@ -5,6 +5,7 @@
  * The only strings are //@ annotation expressions (parsed later by specparser).
  */
 
+import { matchChain, lowerMatch } from "./match-chain.js";
 import path from "path";
 import { Project, Node, FunctionDeclaration, MethodDeclaration, PropertyDeclaration, EnumDeclaration, EnumMember, InterfaceDeclaration, SourceFile, TypeAliasDeclaration, Type, TypeNode, SyntaxKind, Expression, ScriptTarget, VariableDeclaration, ts } from "ts-morph";
 import type { FieldInfo, TypeDeclInfo, VariantInfo } from "./types.js";
@@ -63,6 +64,8 @@ let _validateDependency: (source: SourceFile) => void = () => {};
 /** Counter for synthetic names used by let-statement array destructuring
  *  when the initializer isn't a bare variable (single-eval temp). */
 let _destrCounter = 0;
+let matchCounter = 0;
+const matchHelpers: RawFunction[] = [];
 
 /** Register the call's callee as a cross-file extern if applicable, then
  *  walk the source declaration's body for nested cross-file calls (so the
@@ -353,6 +356,46 @@ function _eraseGenerics(tsType: string): string {
   return tsType;
 }
 
+// A match embedded in another expression gets a local verification helper.
+// Explicit value parameters retain the evaluation point (including inside a
+// short-circuit branch) and give captured locals their lexical bindings.
+function extractMatchExpression(node: Expression, chain: NonNullable<ReturnType<typeof matchChain>>): RawExpr {
+  const id = matchCounter++;
+  const name = freshName("_matchExpr" + id);
+  const input = freshName("_input" + id);
+  const params = [{name: input, tsType: typeToString(chain.input.getType())}];
+  const args: RawExpr[] = [extractExpr(chain.input)];
+  const captures = new Set<string>();
+  const handlers = [...chain.arms.map(a => a.handler), ...(chain.fallback ? [chain.fallback] : [])];
+  for (const handler of handlers) {
+    for (const ref of handler.getDescendantsOfKind(SyntaxKind.Identifier)) {
+      const parent = ref.getParent();
+      const sym = Node.isShorthandPropertyAssignment(parent) ? parent.getValueSymbol() : ref.getSymbol();
+      const decl = sym?.getDeclarations()[0];
+      if (!decl || !(Node.isVariableDeclaration(decl) || Node.isParameterDeclaration(decl) || Node.isBindingElement(decl))) continue;
+      if (decl.getSourceFile() !== node.getSourceFile() || handler.containsRange(decl.getPos(), decl.getEnd())) continue;
+      if (!decl.getFirstAncestor(a => Node.isFunctionLikeDeclaration(a))) continue;
+      const key = ref.getText();
+      if (captures.has(key)) continue;
+      captures.add(key);
+      params.push({name: key, tsType: typeToString(ref.getType())});
+      args.push({kind: "var", name: key});
+    }
+    // Moving a mutation into a helper would lose the update on return.
+    if (handler.getDescendants().some(n => Node.isBinaryExpression(n) && n.getOperatorToken().getKind() >= SyntaxKind.FirstAssignment
+          && n.getOperatorToken().getKind() <= SyntaxKind.LastAssignment
+        || Node.isPostfixUnaryExpression(n) || (Node.isPrefixUnaryExpression(n)
+          && [SyntaxKind.PlusPlusToken, SyntaxKind.MinusMinusToken].includes(n.getOperatorToken()))
+        || (Node.isPropertyAccessExpression(n) && ["push","pop","set","add","delete","sort","unshift"].includes(n.getName()))))
+      throw new Error("Mutation in an embedded match handler requires returning the match directly");
+  }
+  const body = lowerMatch(chain, id, extractExpr, { kind: "var", name: input });
+  matchHelpers.push({ name, params, body, returnType: typeToString(node.getType()), line: node.getStartLineNumber(),
+    tsParams: params.map(p => ({kind: "simple", binds: [p.name]})), typeParams: [], exported: false,
+    requires: [], ensures: [], contract: [], decreases: null, pure: false, autohavoc: false, typeAnnotations: [] });
+  return {kind: "call", fn: {kind: "var", name}, args};
+}
+
 function extractExpr(node: Expression): RawExpr {
   // Havoc key matching: replace matching calls or new expressions with havoc expression
   if (_havocKey && (Node.isCallExpression(node) || Node.isNewExpression(node))) {
@@ -468,6 +511,8 @@ function extractExpr(node: Expression): RawExpr {
 
   // Call expression: f(a, b), x?.foo() (`?.` on the property), or x?.() (`?.` on call)
   if (Node.isCallExpression(node)) {
+    const chain = matchChain(node);
+    if (chain) return extractMatchExpression(node, chain);
     // Object.fromEntries(map) → identity (Map IS Record in Dafny)
     const callee = node.getExpression();
     if (Node.isPropertyAccessExpression(callee) &&
@@ -2033,6 +2078,11 @@ function extractStmts(stmts: Node[]): RawStmt[] {
 
     if (Node.isReturnStatement(s)) {
       const expr = s.getExpression();
+      const chain = expr && matchChain(expr);
+      if (chain) {
+        result.push(...lowerMatch(chain, matchCounter++, extractExpr));
+        continue;
+      }
       // Bare `return;` in a `T | undefined` function → emit `return None;`
       // ("undefined" is mapped to None by dafny-emit). For void-returning
       // functions this would emit the wrong shape, but lsc has no current
@@ -2156,8 +2206,9 @@ function extractFunctionInner(fn: FunctionDeclaration | MethodDeclaration, paren
   let extractedBody: RawStmt[];
   let annots: Annotation[];
   if (body && !Node.isBlock(body)) {
-    const expr = extractExpr(body as Expression);
-    extractedBody = [{ kind: "return", value: expr, line: body.getStartLineNumber() }];
+    const chain = matchChain(body as Expression);
+    extractedBody = chain ? lowerMatch(chain, matchCounter++, extractExpr)
+      : [{ kind: "return", value: extractExpr(body as Expression), line: body.getStartLineNumber() }];
     annots = parentAnnotations ?? collectFunctionAnnotations(fn);
   } else if (body && Node.isBlock(body)) {
     extractedBody = extractStmts(body.getStatements());
@@ -2288,6 +2339,8 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // tests) must not leak a havoc key, temp-name counter, or function-local maps.
   _havocKey = null;
   _destrCounter = 0;
+  matchCounter = 0;
+  matchHelpers.length = 0;
   _typeParamMap = new Map();
   _reservedForCounterNames = new Set();
   // Seed the fresh-name check (names.ts) before anything mints: every
@@ -3061,7 +3114,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
     typeDecls,
     externs: Array.from(_externs.values()),
     constants,
-    functions,
+    functions: [...matchHelpers, ...functions],
     classes,
   };
 }
