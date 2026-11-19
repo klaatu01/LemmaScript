@@ -705,13 +705,13 @@ function emitStmt(s: Stmt, indent: number): string {
 
 /** Collect every function/variable name an IR tree references (stripping any
  *  `Pure.` qualifier), via a generic walk over `app`/`var` nodes. */
-function collectRefNames(node: unknown, into: Set<string>): void {
+function collectRefNames(node: unknown, into: Set<string>, callsOnly = false): void {
   if (node === null || typeof node !== "object") return;
-  if (Array.isArray(node)) { for (const x of node) collectRefNames(x, into); return; }
+  if (Array.isArray(node)) { for (const x of node) collectRefNames(x, into, callsOnly); return; }
   const n = node as { kind?: string; fn?: unknown; name?: unknown };
   if (n.kind === "app" && typeof n.fn === "string") into.add(n.fn.replace(/^Pure\./, ""));
-  if (n.kind === "var" && typeof n.name === "string") into.add(n.name.replace(/^Pure\./, ""));
-  for (const k of Object.keys(node)) collectRefNames((node as Record<string, unknown>)[k], into);
+  if (!callsOnly && n.kind === "var" && typeof n.name === "string") into.add(n.name.replace(/^Pure\./, ""));
+  for (const k of Object.keys(node)) collectRefNames((node as Record<string, unknown>)[k], into, callsOnly);
 }
 
 /** Lean requires definition-before-use: order sibling decls so one that
@@ -943,7 +943,7 @@ export function emitLeanFile(file: Module): string {
     for (const d of file.decls) {
       if (d.kind !== "method" || nondeterministicMethods.has(d.name)) continue;
       const refs = new Set<string>();
-      collectRefNames(d.body, refs);
+      collectRefNames(d.body, refs, true);
       if ([...refs].some(name => nondeterministicMethods.has(name))) {
         nondeterministicMethods.add(d.name);
         added = true;
@@ -968,7 +968,7 @@ export function emitLeanFile(file: Module): string {
     lines.push("-/");
   }
   for (const imp of file.imports) lines.push(`import ${imp}`);
-  if (nondeterministicMethods.size) lines.push("import LemmaScript.Extern");
+  if (file.decls.some(d => d.kind === "extern" && d.impure)) lines.push("import LemmaScript.Extern");
   if (_needsJSString && !file.imports.includes("LemmaScript.JSString"))
     lines.push("import LemmaScript.JSString");
   if (file.options.length > 0) lines.push("");
