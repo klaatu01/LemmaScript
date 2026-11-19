@@ -301,6 +301,12 @@ expect_failure "incorrect refund verified" \
   npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/refund.ts" > "$fixture_dir/refund.log" 2>&1
 grep -q "postcondition could not be proved" "$fixture_dir/refund.log"
 
+cp examples/refund.ts tools/fixtures/import-refund.ts "$fixture_dir/"
+npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/import-refund.ts"
+sed 's/new RangeError/new TypeError/' examples/refund.ts > "$fixture_dir/wrong-error.ts"
+expect_failure "wrong error constructor verified" npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/wrong-error.ts" > "$fixture_dir/wrong-error.log" 2>&1
+grep -q 'assertion might not hold' "$fixture_dir/wrong-error.log"
+
 # Prove the same collection contracts with default stdlib, scalar/local, and
 # UTF-16/local. All generated artifacts stay in the temporary fixture directory.
 cp -R tools/fixtures/collection-library-project "$fixture_dir/local-collections"

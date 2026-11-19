@@ -70,7 +70,7 @@ A handful of `Math.*` helpers are understood: `abs`, `min`, `max`, `floor`, `cei
 | `break` | ✅ — add `//@ done_with` to say what holds on exit |
 | `continue` | ✅ |
 | `return` inside a loop | ✅ on Dafny; on Lean, restructure to `break` + a result variable |
-| `throw new Error(...)` | ✅ — modeled as an unreachable point; characterize valid input with `//@ requires` instead of relying on it |
+| `throw new Error(...)` | ✅ — modeled as an unreachable point; use `//@ requires` to prove it unreachable, or specify intentional rejection with Dafny’s `//@ throws Error when P` |
 
 Loops are where most of the proof effort lives: a `while` or `for` usually needs a loop invariant. That's expected — it's the heart of what's being verified.
 

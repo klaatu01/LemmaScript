@@ -16,3 +16,9 @@ export function refundRemainder(captured: number, refunded: number): number {
   //@ ensures \result === captured
   return refund(captured - refunded, captured, refunded);
 }
+
+export function maybeRefund(enabled: boolean, amount: number, captured: number, refunded: number): number {
+  //@ throws RangeError when enabled && amount > captured - refunded
+  //@ ensures !enabled ==> \result === refunded
+  return enabled ? refund(amount, captured, refunded) : refunded;
+}
