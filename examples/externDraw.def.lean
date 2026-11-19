@@ -3,7 +3,6 @@
   Do not edit — re-run `lsc gen` to regenerate.
 -/
 import «externDraw.types»
-import LemmaScript.Extern
 
 set_option velvet.semantics.termination "total"
 
