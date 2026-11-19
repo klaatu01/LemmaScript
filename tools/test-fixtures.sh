@@ -137,6 +137,12 @@ if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; the
 fi
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-binder-collisions.ts"
 
+# A well-typed mutation must reach the verifier and fail its contract.
+sed 's@return Math.floor@return Math.ceil@' examples/scaledAmount.ts > "$fixture_dir/scaledAmount.ts"
+expect_failure "incorrect scaledAmount verified" \
+  npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/scaledAmount.ts" > "$fixture_dir/scaledAmount.log" 2>&1
+grep -q "postcondition could not be proved" "$fixture_dir/scaledAmount.log"
+
 # Project configuration: nearest-ancestor discovery, generic file overrides,
 # extern defaults, safe-slice, and mirrored Dafny artifact routing. Work from a
 # copy because proof-dir generation intentionally creates companion files.
