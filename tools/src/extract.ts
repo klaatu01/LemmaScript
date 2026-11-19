@@ -1031,6 +1031,26 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   const override = firstAnnotExpr(parseAnnotations(decl), "type");
   if (override) return { name, typeParams: tpField, kind: "alias", aliasOf: override };
 
+  // An open conditional/mapped alias is a checker computation. Its concrete
+  // instantiations, rather than the template itself, have runtime shapes.
+  if (tpField && isComputedTemplate(decl)) return null;
+  const rhs = decl.getTypeNode();
+  if (!tpField && rhs && computedReference(rhs)) {
+    const existing = computedInstances.get(type);
+    if (existing) return { name, kind: "alias", aliasOf: existing };
+    computedInstances.set(type, name);
+  }
+  return extractResolvedDecl(name, type, decl, tpField, extraDecls);
+}
+
+function isComputedTemplate(decl: TypeAliasDeclaration): boolean {
+  const rhs = decl.getTypeNode();
+  return !!rhs && (Node.isConditionalTypeNode(rhs) || Node.isMappedTypeNode(rhs)
+    || (Node.isIndexedAccessTypeNode(rhs) && !!rhs.getFirstDescendantByKind(SyntaxKind.MappedType)));
+}
+
+function extractResolvedDecl(name: string, type: Type, decl: Node, tpField?: string[],
+    extraDecls?: TypeDeclInfo[]): TypeDeclInfo | null {
   const enumInfo = constEnumInfo(type);
   if (enumInfo) {
     // A type alias preserves numeric behavior but creates no value binding.
@@ -1080,7 +1100,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   // so type.isUnion() returns false. Detect by checking the source text
   // for union syntax '|' AND a string-literal discriminant field.
   if (type.isObject() && !type.isIntersection()) {
-    const srcText = decl.getTypeNode()?.getText() ?? "";
+    const srcText = Node.isTypeAliasDeclaration(decl) ? decl.getTypeNode()?.getText() ?? "" : "";
     if (srcText.includes("|")) {
       const disc = findDiscriminant([type]);
       if (disc) {
@@ -1236,7 +1256,31 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
  *  no checker, so an indexed access type (`T["k"]`, `T["k"][number]`) would
  *  survive as an opaque name spelled with brackets. When the annotation uses
  *  one, render the checker's resolved type instead. */
+const computedInstances = new Map<Type, string>();
+
+function computedReference(tn: TypeNode): TypeAliasDeclaration | undefined {
+  const ref = Node.isTypeReference(tn) ? tn.getTypeName().getSymbol() : undefined;
+  const alias = (ref?.getAliasedSymbol() ?? ref)?.getDeclarations().find(Node.isTypeAliasDeclaration);
+  return alias && alias.getTypeParameters().length && isComputedTemplate(alias) ? alias : undefined;
+}
+
 function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
+  const alias = computedReference(tn);
+  if (alias) {
+    if (type.getFlags() & (ts.TypeFlags.Conditional | ts.TypeFlags.TypeParameter | ts.TypeFlags.IndexedAccess)
+        || type.isAny() || type.isUnknown())
+      throw new Error(`Unresolved computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
+    const existing = computedInstances.get(type);
+    if (existing) return existing;
+    const name = freshName(alias.getName() + "Instance" + computedInstances.size);
+    computedInstances.set(type, name);
+    const extra: TypeDeclInfo[] = [];
+    const info = extractResolvedDecl(name, type, tn, undefined, extra);
+    if (!info || (info.kind === "alias" && info.aliasOf?.startsWith(alias.getName() + "<")))
+      throw new Error(`Unsupported computed type ${tn.getText()} at line ${tn.getStartLineNumber()}`);
+    _synthArrayUnions?.push(...extra, info);
+    return name;
+  }
   const indexed = Node.isIndexedAccessTypeNode(tn)
     || tn.getFirstDescendantByKind(SyntaxKind.IndexedAccessType) !== undefined;
   return indexed ? typeToString(type) : undefined;
@@ -2327,6 +2371,7 @@ export function extractModule(sourceFile: SourceFile, options: LscOptions = DEFA
   // pushing into `typeDecls` so resolve sees the synth as a regular user type.
   // Set before declare-type parsing so declare-type field types can also synth.
   _synthArrayUnions = typeDecls;
+  computedInstances.clear();
 
   // `//@ declare-type Name { f1: T1, ... }` — record form.
   // `//@ declare-type Name = TsType`         — alias form (e.g. `Ruleset = Rule[]`).
