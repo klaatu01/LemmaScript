@@ -329,6 +329,22 @@ expect_failure \
   npx tsx tools/src/lsc.ts gen --backend=lean "$fixture_dir/utf16-project/src/lean-rejected.ts"
 expect_absent "$fixture_dir/utf16-project/src/lean-rejected.def.lean"
 
+# A well-typed mutation must reach the verifier and fail its contract.
+mkdir -p "$fixture_dir/matches/node_modules"
+cp examples/tsconfig.json "$fixture_dir/matches/tsconfig.json"
+ln -s "$PWD/node_modules/ts-pattern" "$fixture_dir/matches/node_modules/ts-pattern"
+sed 's@state.refunded + e.amount@state.refunded + e.amount + 1@' examples/matchReducer.ts > "$fixture_dir/matches/matchReducer.ts"
+expect_failure "incorrect matchReducer verified" \
+  npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/matches/matchReducer.ts" > "$fixture_dir/matches/matchReducer.log" 2>&1
+grep -q "postcondition could not be proved" "$fixture_dir/matches/matchReducer.log"
+
+sed '/with({tag: "off"}/d' examples/matchReducer.ts > "$fixture_dir/matches/uncovered.ts"
+expect_failure "uncovered event verified" npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/matches/uncovered.ts" > "$fixture_dir/matches/uncovered.log" 2>&1
+grep -q 'assertion might not hold' "$fixture_dir/matches/uncovered.log"
+sed 's/{site: 0}/{site: P.number}/;s/import { match }/import { match, P }/' examples/matchReducer.ts > "$fixture_dir/matches/helper.ts"
+expect_failure "P.number was accepted" npx tsx tools/src/lsc.ts gen --backend=dafny "$fixture_dir/matches/helper.ts" > "$fixture_dir/matches/helper.log" 2>&1
+grep -Fq 'P.* helpers' "$fixture_dir/matches/helper.log"
+
 # The default profile cannot represent a lone surrogate: refused at extraction
 # with the source line, not silently replaced by the UTF-8 file writer.
 expect_failure \

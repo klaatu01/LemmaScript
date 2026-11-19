@@ -120,6 +120,7 @@ datatype Result = ok(value: int) | error(message: string)
 A `switch`/`if`-chain on `result.tag` becomes a `match`, and a spec that conditions on a variant uses the constructor test — `result.tag === "ok"` reads as `result.ok?` in Dafny.
 
 Named aliases can use mapped and conditional types (including `infer`) when the TypeScript checker resolves them to one of these concrete shapes. See [computedCommand.ts](examples/computedCommand.ts).
+Dafny also accepts `match(value)` imported from `ts-pattern`, with ordered `.with(objectLiteral, arrowHandler)` arms and either `.otherwise(handler)` or `.exhaustive()`. Nested literal fields are tested in source order. An uncovered exhaustive path must be proved unreachable. See [matchReducer.ts](examples/matchReducer.ts).
 
 A bare string-literal union (`type State = "idle" | "running"`) becomes an enum: comparisons like `s === "idle"` and using `"running"` as a value both work.
 
