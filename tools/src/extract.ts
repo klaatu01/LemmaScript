@@ -1037,7 +1037,7 @@ function extractTypeDecl(decl: TypeAliasDeclaration, extraDecls?: TypeDeclInfo[]
   const rhs = decl.getTypeNode();
   if (!tpField && rhs && (computedReference(rhs) || isComputedNode(rhs))) {
     assertClosedType(rhs, type);
-    const existing = computedInstances.get(type);
+    const existing = resolvedTypeName(type);
     if (existing) return { name, kind: "alias", aliasOf: existing };
     computedInstances.set(type, name);
   }
@@ -1056,7 +1056,7 @@ function isComputedNode(rhs: TypeNode | undefined): boolean {
 /** Render a closed member through the checker. The declaration's source may
  * still spell the generic template, for example Payloads[K] in a variant. */
 function computedMemberText(type: Type, location: Node, extra: TypeDeclInfo[]): string {
-  const existing = computedInstances.get(type) ?? nestedRecordNames.get(type);
+  const existing = resolvedTypeName(type);
   if (existing) return existing;
   if (type.isTuple()) return "[" + type.getTupleElements().map(t => computedMemberText(t, location, extra)).join(", ") + "]";
   if (type.isArray()) return computedMemberText(type.getArrayElementTypeOrThrow(), location, extra) + "[]";
@@ -1292,6 +1292,10 @@ function declaredTypeTextIfBetter(propDecl: Node | undefined, tsType: string): s
 const computedInstances = new Map<Type, string>();
 const nestedRecordNames = new Map<Type, string>();
 
+function resolvedTypeName(type: Type): string | undefined {
+  return computedInstances.get(type) ?? nestedRecordNames.get(type);
+}
+
 function computedReference(tn: TypeNode): TypeAliasDeclaration | undefined {
   const ref = Node.isTypeReference(tn) ? tn.getTypeName().getSymbol() : undefined;
   const alias = (ref?.getAliasedSymbol() ?? ref)?.getDeclarations().find(Node.isTypeAliasDeclaration);
@@ -1311,7 +1315,7 @@ function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
   const alias = computedReference(tn);
   if (alias || isComputedNode(tn)) {
     assertClosedType(tn, type);
-    const existing = computedInstances.get(type);
+    const existing = resolvedTypeName(type);
     if (existing) return existing;
     const name = freshName((alias?.getName() ?? "Computed") + "Instance" + computedInstances.size);
     computedInstances.set(type, name);
@@ -1324,7 +1328,7 @@ function annotationTypeText(tn: TypeNode, type: Type): string | undefined {
   }
   const indexed = Node.isIndexedAccessTypeNode(tn)
     || tn.getFirstDescendantByKind(SyntaxKind.IndexedAccessType) !== undefined;
-  return indexed ? typeToString(type) : undefined;
+  return indexed ? resolvedTypeName(type) ?? typeToString(type) : undefined;
 }
 
 function typeToString(type: Type): string {
