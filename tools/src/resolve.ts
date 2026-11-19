@@ -958,6 +958,10 @@ function resolveConstEnumMember(obj: RawExpr, name: string, ctx: Ctx): TExpr | u
 
 function resolveExpr(e: RawExpr, ctx: Ctx): TExpr {
   const expr = resolveExprInner(e, ctx);
+  // ts-pattern refines nested optional fields in the selected arrow's parameter.
+  // Keep the projection explicit so Dafny checks presence on this control path.
+  if ((e.kind === "var" || e.kind === "field") && e.presentInHandler && expr.ty.kind === "optional")
+    return { kind: "unop", op: "matchPayload", expr, ty: expr.ty.inner };
   return { ...expr, ty: numericValueType(expr.ty, ctx.typeDecls) };
 }
 
