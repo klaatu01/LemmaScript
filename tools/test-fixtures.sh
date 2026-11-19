@@ -343,6 +343,9 @@ expect_failure "incorrect computedCommand verified" \
   npx tsx tools/src/lsc.ts check --backend=dafny "$fixture_dir/computedCommand.ts" > "$fixture_dir/computedCommand.log" 2>&1
 grep -q "postcondition could not be proved" "$fixture_dir/computedCommand.log"
 
+expect_failure "open conditional type reached emission" npx tsx tools/src/lsc.ts gen --backend=dafny tools/fixtures/open-computed.ts > "$fixture_dir/open-computed.log" 2>&1
+grep -q 'Unresolved computed type' "$fixture_dir/open-computed.log"
+
 # Run log: a real check → broken proof → fixed proof sequence is recorded with
 # member outcomes and hashes, inside a self-ignoring .lemmascript/ beside the config.
 # The repo root may already hold a local run log; only check that it is not appended to.
