@@ -53,6 +53,8 @@ All the usual operators carry over with their normal meaning: `=== !== < <= > >=
 
 Supported literal forms include number/bigint/hex literals, string and template literals (`` `${n} items` `` concatenates), array literals with spread (`[...xs, e]`), object literals with spread (`{ ...obj, f: v }`), and `Record`/`Map` object literals.
 
+For `Math.floor(intAmount * (1 + ratio))` on Dafny, put `//@ type ratio real` inside the function to admit fractional ratios. The default `number` on `intAmount` models an integer. With a ratio of 0.25, amounts of 10 and −10 give 12 and −13. See [scaledAmount.ts](examples/scaledAmount.ts).
+
 A handful of `Math.*` helpers are understood: `abs`, `min`, `max`, `floor`, `ceil` (and `Math.max(...arr)` over an array).
 
 ## Control flow
